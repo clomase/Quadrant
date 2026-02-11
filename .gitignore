@@ -1,0 +1,5 @@
+*.qcow2
+*.img
+
+machines_dir/
+.q-drant/
