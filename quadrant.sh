@@ -2,7 +2,7 @@
 set -e
 
 CONFIG_FILE=./Quadrantfile
-MACHINES_DIR=/opt/goinfre/edelmirw/machines_dir  #"$HOME/machines_dir"
+MACHINES_DIR= #"$HOME/machines_dir"
 IF_COUNTER=1 # начало нумерации адресов
 CMD=$1
 ARG=$2
