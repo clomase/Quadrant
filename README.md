@@ -38,9 +38,9 @@ unalias quadrant
 ## Preparation base image
 - Define the username to be used inside the guest OS and set it in the script on your host at ~/.q-drant/quadrant.sh (default: vagrant):\
   `IN_GUEST_USER="USERNAME"`
-- Create key
- `ssh-keygen -f ~/path-to-castom-key/id_USERNAME_key`
-  `chmod 600 ~/path-to-castom-key/id_USERNAME_key`
+- Create key\
+ `ssh-keygen -f ~/path-to-castom-key/id_USERNAME_key`\
+  `chmod 600 ~/path-to-castom-key/id_USERNAME_key`\
 ```bash
 # Example preparation guest script for using inside base-guest
 # Set username
@@ -81,7 +81,7 @@ Edit it to specify:
  - BASE_DISK : path to your base QCOW2 image
  - SSH_PASS_KEY : path to private SSH key for guest access
  - MACHINES_NAMES : list of VM names (default: node1)
- - Per-VM overrides (VMNAME_CPU, VMNAME_RAM, etc.)
+ - Per-VM overrides (VMNAME_CPU, VMNAME_RAM, etc.)\
  
 ### Start VMs
 ```bash
@@ -91,7 +91,7 @@ Creates a clone of BASE_DISK for each VM from `$MACHINES_NAMES[@]`
 Launches QEMU instances with:
  - Unique MAC addresses and SSH-forwarded ports (22 → 22xx)
  - User-mode networking (-netdev user)
- - Optional socket-based internal networks
+ - Optional socket-based internal networks\
 Waits for SSH readiness
 Executes base provisioning (if defined and first run)
 Saves VM state to `~/.q-drant/machines-info/`
@@ -148,3 +148,6 @@ Result:
  - __worker__ connects to it
  - Both VMs see each other via virtual network interface
  - Docker Swarm initializes on master, worker joins automatically
+
+
+ **RU:** [README_RUS.md](README_RUS.md)
