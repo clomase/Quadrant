@@ -2,7 +2,7 @@
 ![Bash](https://img.shields.io/badge/language-bash-green)
 ![QEMU](https://img.shields.io/badge/hypervisor-QEMU-red)
 ![License](https://img.shields.io/badge/license-MIT-blue)
-![Sudo](https://img.shields.io/badge/sudo-not%20required-success)
+![Sudo](https://img.shields.io/badge/sudo-not%20required-success)\
 Lightweight VM orchestration tool using pure QEMU  (no sudo required)
 
 ## About
@@ -37,12 +37,12 @@ unalias quadrant
 
 ## Preparation base image
 - Define the username to be used inside the guest OS and set it in the script on your host at ~/.q-drant/quadrant.sh (default: vagrant):\
-  IN_GUEST_USER="USERNAME"
+  `IN_GUEST_USER="USERNAME"`
 - Create key
-  ssh-keygen -f ~/path-to-castom-key/id_USERNAME_key
-  chmod 600 ~/path-to-castom-key/id_USERNAME_key
+ `ssh-keygen -f ~/path-to-castom-key/id_USERNAME_key`
+  `chmod 600 ~/path-to-castom-key/id_USERNAME_key`
 ```bash
-# Example preparation guest script
+# Example preparation guest script for using inside base-guest
 # Set username
 IN_GUEST_USER="${IN_GUEST_USER:-vagrant}" # replace row with your USERNAME
 
@@ -67,7 +67,7 @@ sudo chmod 600 "/home/$IN_GUEST_USER/.ssh/authorized_keys"
 sudo sed -i 's/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
 sudo systemctl restart sshd
 ```
- **Note** The base image must be prepared **once**
+ **Note:** The base image must be prepared **once**, the tool will create copies of the base image while preserving all settings
 
 ## Usage
 
@@ -83,4 +83,68 @@ Edit it to specify:
  - MACHINES_NAMES : list of VM names (default: node1)
  - Per-VM overrides (VMNAME_CPU, VMNAME_RAM, etc.)
  
-### 
+### Start VMs
+```bash
+quadrant up
+```
+Creates a clone of BASE_DISK for each VM from `$MACHINES_NAMES[@]`
+Launches QEMU instances with:
+ - Unique MAC addresses and SSH-forwarded ports (22 → 22xx)
+ - User-mode networking (-netdev user)
+ - Optional socket-based internal networks
+Waits for SSH readiness
+Executes base provisioning (if defined and first run)
+Saves VM state to `~/.q-drant/machines-info/`
+After all VMs are ready runs advance provisioning on each node (if defined)
+
+### Check status
+```bash
+quadrant status        # show status of VMs defined in Quadrantfile
+quadrant status --all  # show status of ALL previously created VMs
+```
+
+### SSH into VM
+```bash
+quadrant ssh <vm_name>
+```
+Direct SSH login using the preconfigured key and port
+No need to remember IPs or ports
+
+### Halt VMs
+```bash
+quadrant halt
+```
+Gracefully shuts down all VMs defined in **Quadrantfile** ( `NOPASSWD` sudo needs)
+
+### Destroy VMs
+```bash
+quadrant destroy
+```
+Irreversible:
+ - Kills QEMU processes
+ - Deletes VM disk images
+ - Remove metadatas from `~/.q-drant/`
+ 
+## Example: Two-node cluster with internal network
+**Quadrantfile:**
+```
+BASE_DISK=/opt/base/debian12.qcow2
+SSH_PASS_KEY=~/.ssh/id_ed25519_vagrant
+
+MACHINES_NAMES=("master" "worker")
+
+MASTER_CPU="host"
+MASTER_SMP="2"
+MASTER_RAM="2048"
+MASTER_INTNETS=("listen/5555")
+MASTER_ADVANCE_PROVISION=("sh:./scripts/init-swarm.sh")
+
+WORKER_CPU="qemu64"
+WORKER_INTNETS=("connect/5555")
+WORKER_ADVANCE_PROVISION=("sh:./scripts/join-swarm.sh")
+```
+Result:
+ - __master__ opens socket on port 5555
+ - __worker__ connects to it
+ - Both VMs see each other via virtual network interface
+ - Docker Swarm initializes on master, worker joins automatically
