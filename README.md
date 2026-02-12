@@ -40,7 +40,7 @@ unalias quadrant
   `IN_GUEST_USER="USERNAME"`
 - Create key\
  `ssh-keygen -f ~/path-to-castom-key/id_USERNAME_key`\
-  `chmod 600 ~/path-to-castom-key/id_USERNAME_key`\
+  `chmod 600 ~/path-to-castom-key/id_USERNAME_key`
 ```bash
 # Example preparation guest script for using inside base-guest
 # Set username
@@ -81,7 +81,7 @@ Edit it to specify:
  - BASE_DISK : path to your base QCOW2 image
  - SSH_PASS_KEY : path to private SSH key for guest access
  - MACHINES_NAMES : list of VM names (default: node1)
- - Per-VM overrides (VMNAME_CPU, VMNAME_RAM, etc.)\
+ - Per-VM overrides (VMNAME_CPU, VMNAME_RAM, etc.)
  
 ### Start VMs
 ```bash
@@ -92,9 +92,9 @@ Launches QEMU instances with:
  - Unique MAC addresses and SSH-forwarded ports (22 → 22xx)
  - User-mode networking (-netdev user)
  - Optional socket-based internal networks\
-Waits for SSH readiness
-Executes base provisioning (if defined and first run)
-Saves VM state to `~/.q-drant/machines-info/`
+Waits for SSH readiness\
+Executes base provisioning (if defined and first run)\
+Saves VM state to `~/.q-drant/machines-info/`\
 After all VMs are ready runs advance provisioning on each node (if defined)
 
 ### Check status
