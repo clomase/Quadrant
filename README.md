@@ -10,11 +10,14 @@ Lightweight VM orchestration tool using pure QEMU  (no sudo required)
 - **Multi-stage provisioning** — separates base setup (Docker installation) from advanced tasks (Swarm initialization, token exchange between nodes)
 - **Socket-based internal networks** — connect VMs via socket pairs without bridge setup or `sudo`
 - **Per-VM configuration** — customize CPU, RAM, networks, and provisioning scripts for each machine via `Quadrantfile`
+- **Multiple disk formats** — supports qcow2, qcow, qed, img, raw, vmdk, vdi, vhd, vhdx, vpc
+- **Box download** — pull ready-to-use images from Vagrant-compatible mirrors
 
 ## Requirements
 - Bash ver. 4.3+
 - ssh / scp
 - qemu-system-x86_64 (or another architecture, or binary)
+- curl / wget (both for pull command)
 - base image
 
 ## Description
@@ -33,6 +36,19 @@ source ~/.bashrc
 ```bash
 quadrant uninstall
 unalias quadrant
+```
+
+## Quick Start with **pull**
+- Download a ready-to-use base image with insecure SSH
+```bash
+quadrant init
+quadrant pull
+```
+- BASEIMG_ORIGIN formats in Quadrantfile (Examples):
+```
+BASEIMG_ORIGIN=bento/ubuntu-24.04/1.0.0/libvirt/box
+BASEIMG_ORIGIN=generic/rhel9/1.0.0/virtualbox/box
+BASEIMG_ORIGIN=debian/bullseye64/1.0.0/virtualbox/box
 ```
 
 ## Preparation base image

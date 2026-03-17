@@ -1,12 +1,19 @@
 #!/bin/bash
 set -e
 
-CONFIG_FILE=./Quadrantfile
-MACHINES_DIR= #"$HOME/machines_dir"
-IF_COUNTER=1 # начало нумерации адресов
 CMD=$1
 ARG=$2
+FLAG=$3
+
+CONFIG_FILE=./Quadrantfile
 UTILITY_NAME=quadrant
+
+MACHINES_DIR= #"$HOME/machines_dir"
+EXT_FORMATS=(qcow2 qcow qed img raw vmdk vdi vhd vhdx vpc)
+SOURCE_MIRROR="https://vagrant.elab.pro/downloads/"
+SOURCE_BASEIMG="https://vagrant.elab.pro/"
+
+IF_COUNTER=1 # начало нумерации адресов
 IN_GUEST_USER=vagrant
 
 if [ -z "$CMD" ]; then
@@ -78,6 +85,33 @@ SSH_PASS_KEY=		# Путь до соответствующего закрытог
 # MANAGER01_ADD_FORWARD="hostfwd=tcp::80-:80,hostfwd=tcp::443-:443" # несколько пишутся без пробелов через запятую
 #
 # ============================
+# Подготовка базового образа
+# ============================
+# Быстрая загрузка готового образа из зеркала:
+#   1. Укажи путь к боксу в переменной BASEIMG_ORIGIN
+#   2. Выполни: quadrant pull
+#   3. Скрипт скачает архив, извлечёт диск и обновит BASE_DISK в этом файле
+#
+# Доступные образы: https://vagrant.elab.pro/
+# Примеры путей для BASEIMG_ORIGIN:
+# BASEIMG_ORIGIN=bento/ubuntu-24.04/1.0.0/libvirt/box      # Ubuntu 24.04
+# BASEIMG_ORIGIN=generic/rhel9/1.0.0/virtualbox/box        # RHEL 9
+# BASEIMG_ORIGIN=debian/bullseye64/1.0.0/virtualbox/box    # Debian 11
+#
+# После выполнения 'quadrant pull':
+#   1. Диск сохраняется в $MACHINES_DIR/ImgOrigin.<формат>
+#   2. Автоматически подставляется небезопасный SSH-ключ Vagrant
+#   3. Переменные BASE_DISK и SSH_PASS_KEY обновляются в этом файле
+#
+# Ручная подготовка образа:
+#   1. Укажи путь к существующему диску в BASE_DISK
+#   2. Выполни: quadrant zero run
+#   3. Система запустит образ
+#   4. После подготовки (пользователь, sudo, SSH) выключи ВМ — диск готов к использованию
+#
+# Важно: небезопасный ключ ('vagrant_insecur') предназначен ТОЛЬКО для учебных и тестовых сред.
+#
+# ============================
 # Опции для отладки
 # ============================
 #	_DEMON			# В значении FALSE выведет лог запуска текущей машины в окне терминала
@@ -96,34 +130,21 @@ else echo "Файл конфигурации не найден в директо
 	}
 
 machine_creator() {
-	local EXECUTOR="$1"
-	local NAME="$2"
-	local ADVICES="$3"
-	local CPU="$4"
-	local SMP="$5"
-	local RAM="$6"
-	local DISK="$7"
-	local PORT="$8"
-	local MAC="$9"
-	local NET_DEVICE="${10}"
-	local GRAPHIC="${11}"
-	local FORWARD="${12}"
-	shift 12
-	local -a ADDNETS=("$@")
+	local -n OPTIONS="$1"
 
-	if [ "$FORWARD" != "" ]; then
-		FORWARD=",$FORWARD"; fi
+	if [ "${OPTIONS[ADD_FORWARD]}" != "" ]; then
+		OPTIONS[ADD_FORWARD]=",${OPTIONS[ADD_FORWARD]}"; fi
 
-	$EXECUTOR \
-	-name $NAME \
-	$ADVICES \
-	-cpu $CPU \
-	-smp $SMP \
-	-m $RAM \
-	-drive file=$DISK,if=virtio,cache=unsafe \
-	-netdev user,id=net0,hostfwd=tcp::${PORT}-:22${FORWARD} \
-	-device ${NET_DEVICE},netdev=net0,mac=${MAC} \
-	$GRAPHIC ${ADDNETS[@]}
+	${OPTIONS[EXECUTOR]} \
+	-name ${OPTIONS[NAME]} \
+	${OPTIONS[ADVICES]} \
+	-cpu ${OPTIONS[CPU]} \
+	-smp ${OPTIONS[SMP]} \
+	-m ${OPTIONS[RAM]} \
+	-drive file=${OPTIONS[DISK]},if=virtio,cache=unsafe \
+	-netdev user,id=net0,hostfwd=tcp::${OPTIONS[PORT]}-:22${OPTIONS[ADD_FORWARD]} \
+	-device ${OPTIONS[NET_DEVICE]},netdev=net0,mac=${OPTIONS[MAC]} \
+	${OPTIONS[GRAPHIC]} ${OPTIONS[INTNETS]}
 	}
 
 iface_create() {
@@ -168,6 +189,30 @@ ssh_check() {
 	return 127
 	}
 
+get_value() {
+	local vm="$1"
+	local FIELD="$2"
+	local DEFAULT="$3"
+	
+	local VALUE="${vm^^}_${FIELD}"
+	VALUE="${!VALUE}"
+	VALUE="${VALUE:-$DEFAULT}"
+	echo "$VALUE"
+	}
+	
+ssh_open() {
+	local port="$1"
+	local key="$2"
+	local user="$3"
+	local name="$4"
+	
+	if ssh_check $port "$key" "false" $user; then
+		exec ssh -p $port -i $key -o StrictHostKeyChecking=no \
+		-o GlobalKnownHostsFile=/dev/null \
+		-o UserKnownHostsFile=/dev/null ${user}@localhost
+	else echo "$name недоступна"; fi
+	}
+
 MACHINES_NAMES=${MACHINES_NAMES:-"node1"}
 MACHINES_DIR=${MACHINES_DIR:-"$HOME/machines_dir"}
 IN_GUEST_USER=${IN_GUEST_USER:-vagrant}
@@ -177,6 +222,16 @@ case $CMD in
 	if ! conf_check; then exit 100; fi
 	if [[ -n "$BASE_DISK" && -n "$SSH_PASS_KEY" ]]; then
 		if [[ -f "$BASE_DISK" && -f "$SSH_PASS_KEY" ]]; then
+			DISK_EXT="${BASE_DISK##*.}"
+			case $DISK_EXT in
+			qcow2|qcow|qed|img|raw|vmdk|vdi|vhd|vhdx|vpc)
+				true
+			;;
+			*)
+				echo "Ошибка формата"
+				exit 120
+			;;
+			esac
 			echo "Начало работы"
 		else
 			echo "Не найдены файл диска-источника или файл ссш-ключа"
@@ -184,54 +239,33 @@ case $CMD in
 	else
 		echo "Необходимо указать переменную базового-диска и ссш-ключ к нему"
 		exit 255; fi
-
+		
 for vm in "${MACHINES_NAMES[@]}"; do
 	mkdir -p $MACHINES_DIR/$vm
-	if [[ ! -f "$MACHINES_DIR/$vm/disk.qcow2" ]]; then
+	if [[ ! -f "$MACHINES_DIR/$vm/disk.$DISK_EXT" ]]; then
 		echo "Копируем диск..."
-		cp $BASE_DISK "$MACHINES_DIR/$vm/disk.qcow2"
-		echo "Диск создан"
+		if cp $BASE_DISK "$MACHINES_DIR/$vm/disk.$DISK_EXT"; then
+			echo "Диск создан"
+		else echo "Не удалось выполнить создание диска"; fi
 	else echo "Найден существующий диск для $vm"; fi
 
 	if [[ ! -d "$HOME/.q-drant/machines-info/$vm" ]]; then
 		mkdir -p "$HOME/.q-drant/machines-info/$vm"; fi
-
-	TARGET_EXECUTOR="${vm^^}_EXECUTOR"
-	TARGET_EXECUTOR=${!TARGET_EXECUTOR}
-	TARGET_EXECUTOR=${TARGET_EXECUTOR:-"qemu-system-x86_64"}
-
-	TARGET_CPU="${vm^^}_CPU"
-	TARGET_CPU=${!TARGET_CPU}
-	TARGET_CPU=${TARGET_CPU:-"qemu64"}
-
-	TARGET_SMP="${vm^^}_SMP"
-	TARGET_SMP=${!TARGET_SMP}
-	TARGET_SMP=${TARGET_SMP:-"1"}
-
-	TARGET_RAM="${vm^^}_RAM"
-	TARGET_RAM=${!TARGET_RAM}
-	TARGET_RAM=${TARGET_RAM:-"1024"}
-
-	TARGET_DISK="$MACHINES_DIR/$vm/disk.qcow2" # не забыть поменять на .qcow2
-
-	TARGET_PORT=$(( 2200 + IF_COUNTER ))
-	TARGET_MAC="52:54:00:00:$(( 10 + IF_COUNTER )):$(( 10 + IF_COUNTER ))"
+	
+	declare -A TARGET
+	TARGET[NAME]="$vm"
+	TARGET[EXECUTOR]=$(get_value "$vm" "EXECUTOR" "qemu-system-x86_64")	
+	TARGET[CPU]=$(get_value "$vm" "CPU" "qemu64")	
+	TARGET[SMP]=$(get_value "$vm" "SMP" "1")	
+	TARGET[RAM]=$(get_value "$vm" "RAM" "1024")
+	TARGET[DISK]="$MACHINES_DIR/$vm/disk.$DISK_EXT"
+	TARGET[PORT]=$(( 2200 + IF_COUNTER ))
+	TARGET[MAC]="52:54:00:00:$(( 10 + IF_COUNTER )):$(( 10 + IF_COUNTER ))"
 	(( IF_COUNTER++ ))
-
-	TARGET_NET_DEVICE="${vm^^}_NET_DEVICE"
-	TARGET_NET_DEVICE=${!TARGET_NET_DEVICE}
-	TARGET_NET_DEVICE=${TARGET_NET_DEVICE:-"e1000"}
-
-	TARGET_ADD_FORWARD="${vm^^}_ADD_FORWARD"
-	TARGET_ADD_FORWARD="${!TARGET_ADD_FORWARD}"
-
-	TARGET_ADVICES="${vm^^}_ADVICES"
-	TARGET_ADVICES="${!TARGET_ADVICES}"
-	TARGET_ADVICES="${TARGET_ADVICES:-"-enable-kvm"}"
-
-	TARGET_GRAPHIC="${vm^^}_GRAPHIC"
-	TARGET_GRAPHIC="${!TARGET_GRAPHIC}"
-	TARGET_GRAPHIC="${TARGET_GRAPHIC:-"-nographic"}"
+	TARGET[NET_DEVICE]=$(get_value "$vm" "NET_DEVICE" "e1000")
+	TARGET[ADD_FORWARD]=$(get_value "$vm" "ADD_FORWARD")	
+	TARGET[ADVICES]=$(get_value "$vm" "ADVICES" "-enable-kvm")	
+	TARGET[GRAPHIC]=$(get_value "$vm" "GRAPHIC" "-nographic")
 
 	TARGET_INTNETS="${vm^^}_INTNETS"
 	INTNETS="${!TARGET_INTNETS}"
@@ -239,50 +273,36 @@ for vm in "${MACHINES_NAMES[@]}"; do
 		declare -n NETS="$TARGET_INTNETS"
 		TARGET_ADDNETS=()
 		for iface in "${NETS[@]}"; do
-			ADD=( $(iface_create $iface $TARGET_NET_DEVICE $((IF_COUNTER - 1)) $IF_COUNTER) )
+			ADD=( $(iface_create $iface ${TARGET[NET_DEVICE]} $((IF_COUNTER - 1)) $IF_COUNTER) )
 			TARGET_ADDNETS+=( "${ADD[@]}" )
 			(( IF_COUNTER++ ))
 		done
+		TARGET[INTNETS]=" ${TARGET_ADDNETS[@]} "
 	fi
+	TARGET[DEMON]=$(get_value "$vm" "DEMON" "TRUE")
 
-	TARGET_DEMON="${vm^^}_DEMON"
-	TARGET_DEMON="${!TARGET_DEMON}"
-	TARGET_DEMON="${TARGET_DEMON:-TRUE}"
-
-	if [ "${TARGET_DEMON^^}" == "FALSE" ]; then
+	if [ "${TARGET[DEMON]^^}" == "FALSE" ]; then
 		echo "Запуск $vm"
-		machine_creator "$TARGET_EXECUTOR" "$vm" "$TARGET_ADVICES" $TARGET_CPU $TARGET_SMP \
- 	$TARGET_RAM $TARGET_DISK $TARGET_PORT $TARGET_MAC $TARGET_NET_DEVICE \
- 	"$TARGET_GRAPHIC" "$TARGET_ADD_FORWARD" \
- 	"${TARGET_ADDNETS[@]}"
+		machine_creator TARGET
 	else
 		echo "Запуск $vm"
-		machine_creator "$TARGET_EXECUTOR" "$vm" "$TARGET_ADVICES" $TARGET_CPU $TARGET_SMP \
- 	$TARGET_RAM $TARGET_DISK $TARGET_PORT $TARGET_MAC $TARGET_NET_DEVICE \
- 	"$TARGET_GRAPHIC" "$TARGET_ADD_FORWARD" \
- 	"${TARGET_ADDNETS[@]}" > $MACHINES_DIR/$vm/qemu.log 2>&1 &
+		machine_creator TARGET > $MACHINES_DIR/$vm/qemu.log 2>&1 &
  	fi
 
-	TARGET_TIMEOUT="${vm^^}_TIMEOUT"
-	TARGET_TIMEOUT="${!TARGET_TIMEOUT}"
-	TARGET_TIMEOUT="${TARGET_TIMEOUT:-15}"
-	sleep $TARGET_TIMEOUT
+	TARGET[TIMEOUT]=$(get_value "$vm" "TIMEOUT" "15")
+	sleep ${TARGET[TIMEOUT]}
+	TARGET[SSH_DEBUG]=$(get_value "$vm" "SSH_DEBUG" "FALSE")
 
-	TARGET_SSH_DEBUG="${vm^^}_SSH_DEBUG"
-	TARGET_SSH_DEBUG="${!TARGET_SSH_DEBUG}"
-	TARGET_SSH_DEBUG="${TARGET_SSH_DEBUG:-FALSE}"
-
-	if ssh_check ${TARGET_PORT} "$SSH_PASS_KEY" "$TARGET_SSH_DEBUG" $IN_GUEST_USER; then
+	if ssh_check ${TARGET[PORT]} "$SSH_PASS_KEY" "${TARGET[SSH_DEBUG]}" "$IN_GUEST_USER"; then
 		echo "Виртуальная машина $vm запущена"
 	else
 		echo "Машина $vm не отвечает"
 		pkill -f "qemu.*-name $vm"
 		exit 255; fi
 
-	TARGET_SFOLDER="${vm^^}_SFOLDER"
-	TARGET_SFOLDER="${!TARGET_SFOLDER}"
+	TARGET_SFOLDER=$(get_value "$vm" "SFOLDER")
 	if [[ -n "$TARGET_SFOLDER" && -d "$TARGET_SFOLDER" ]]; then
-		scp -P ${TARGET_PORT} -i ${SSH_PASS_KEY} -o GlobalKnownHostsFile=/dev/null \
+		scp -P ${TARGET[PORT]} -i ${SSH_PASS_KEY} -o GlobalKnownHostsFile=/dev/null \
 		-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
 		-r "$TARGET_SFOLDER" \
 		${IN_GUEST_USER}@localhost:~/ >/dev/null 2>&1
@@ -298,12 +318,12 @@ for vm in "${MACHINES_NAMES[@]}"; do
 				AGENT=$(cut -f1 -d':' <<< $row)
 				TASK=$(cut -f2 -d':' <<< $row)
 				if [ -f "$TASK" ]; then
-					scp -P ${TARGET_PORT} -i ${SSH_PASS_KEY} \
+					scp -P ${TARGET[PORT]} -i ${SSH_PASS_KEY} \
 					-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
 					-o GlobalKnownHostsFile=/dev/null \
 					"$TASK" ${IN_GUEST_USER}@localhost:~/ >/dev/null 2>&1
 					BASETASK=$(basename "$TASK")
-					ssh -p ${TARGET_PORT} -i "$SSH_PASS_KEY" \
+					ssh -p ${TARGET[PORT]} -i "$SSH_PASS_KEY" \
 					-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
 					-o GlobalKnownHostsFile=/dev/null \
 					${IN_GUEST_USER}@localhost "chmod +x $BASETASK \
@@ -316,8 +336,8 @@ for vm in "${MACHINES_NAMES[@]}"; do
 	fi
 
 	cat > "$HOME/.q-drant/machines-info/$vm/info" <<-EOF
-	PORT=$TARGET_PORT
-	DISK_PATH="$TARGET_DISK"
+	PORT=${TARGET[PORT]}
+	DISK_PATH="${TARGET[DISK]}"
 	EOF
 done
 	sleep 1
@@ -325,11 +345,9 @@ done
 		source "$HOME/.q-drant/machines-info/$on_vm/info"
 		ON_PORT=$PORT
 
-		TARGET_REPEAT_PROVISION="${on_vm^^}_REPEAT_PROVISION"
-		TARGET_REPEAT_PROVISION="${!TARGET_REPEAT_PROVISION}"
-		TARGET_REPEAT_PROVISION="${TARGET_REPEAT_PROVISION:-FALSE}"
+		TARGET[REPEAT_PROVISION]=$(get_value "$on_vm" "REPEAT_PROVISION" "FALSE")
 
-		if [[ "${TARGET_REPEAT_PROVISION^^}" == "TRUE" ]]; then
+		if [[ "${TARGET[REPEAT_PROVISION]^^}" == "TRUE" ]]; then
 			rm -f "$HOME/.q-drant/machines-info/$on_vm/advance_provisioned" 2>/dev/null; fi
 
 		if [ ! -f "$HOME/.q-drant/machines-info/$on_vm/advance_provisioned" ]; then
@@ -457,11 +475,7 @@ done
 		if [ -f "$HOME/.q-drant/machines-info/$ARG/info" ]; then
 			source "$HOME/.q-drant/machines-info/$ARG/info"
 			SSH_PORT=$PORT
-			if ssh_check $SSH_PORT "$SSH_PASS_KEY" "false" $IN_GUEST_USER; then
-				exec ssh -p $SSH_PORT -i $SSH_PASS_KEY -o StrictHostKeyChecking=no \
-				-o GlobalKnownHostsFile=/dev/null \
-				-o UserKnownHostsFile=/dev/null ${IN_GUEST_USER}@localhost
-			else echo "$ARG недоступна"; fi
+			ssh_open $SSH_PORT "$SSH_PASS_KEY" $IN_GUEST_USER $ARG
 		else echo "$ARG не создана"; fi
 	else echo "$ARG не найдена в конфигурационном файле"; fi
 ;;
@@ -479,10 +493,139 @@ done
 "uninstall")
 	source $HOME/.bashrc
 	if cat $HOME/.bashrc | grep -i ${UTILITY_NAME} >/dev/null; then
-		grep -vi ${UTILITY_NAME} "$HOME/.bashrc" >> "$HOME/.bashrc-qd-temp"
+		grep -vi ${UTILITY_NAME} "$HOME/.bashrc" > "$HOME/.bashrc-qd-temp"
 		mv "$HOME/.bashrc-qd-temp" "$HOME/.bashrc"
 		rm -r "$HOME/.q-drant"
 		echo "Для завершения удаления выполните \"unalias ${UTILITY_NAME}\" или откройте новый терминал"
 	else echo "Не обнаруженно записей в ~/.bashrc, нечего удалять"; fi
+;;
+"zero")
+	if ! conf_check; then exit 100; fi
+	ARG="${ARG:-run}"
+	case ${ARG,,} in
+	"run")
+	if [ ! -f "$BASE_DISK" ]; then
+		echo "Ошибка указания пути до исходного диска"
+		exit 100
+	else
+		DISK_EXT="${BASE_DISK##*.}"
+		case $DISK_EXT in
+		qcow2|qcow|qed|img|raw|vmdk|vdi|vhd|vhdx|vpc)
+			true
+		;;
+		*)
+			echo "Ошибка формата"
+			exit 120
+		;;
+		esac
+		echo "Начало работы"; fi
+	
+	mkdir -p ~/.q-drant/base
+	declare -A TARGET
+	TARGET[NAME]="base"
+	TARGET[EXECUTOR]=$(get_value "base" "EXECUTOR" "qemu-system-x86_64")	
+	TARGET[CPU]=$(get_value "base" "CPU" "qemu64")	
+	TARGET[SMP]=$(get_value "base" "SMP" "1")	
+	TARGET[RAM]=$(get_value "base" "RAM" "2048")
+	TARGET[DISK]="$BASE_DISK"
+	TARGET[PORT]=$(( 2200 + IF_COUNTER ))
+	TARGET[MAC]="52:54:00:00:$(( 10 + IF_COUNTER )):$(( 10 + IF_COUNTER ))"
+	TARGET[NET_DEVICE]=$(get_value "base" "NET_DEVICE" "e1000")
+	TARGET[ADD_FORWARD]=$(get_value "base" "ADD_FORWARD")	
+	TARGET[ADVICES]=$(get_value "base" "ADVICES" "-enable-kvm")	
+	TARGET[GRAPHIC]=$(get_value "base" "GRAPHIC" "-nographic -serial mon:stdio ")
+	TARGET[DEMON]=$(get_value "base" "DEMON" "FALSE")
+	if [[ "${FLAG^^}" == "--SSH" ]]; then
+		TARGET[GRAPHIC]="-nographic"
+		TARGET[DEMON]="TRUE"; fi
+	TARGET[TIMEOUT]=$(get_value "base" "TIMEOUT" "10")
+	if [ "${TARGET[DEMON]^^}" == "FALSE" ]; then
+		echo "Запуск базового образа"
+		machine_creator TARGET
+	else
+		echo "Запуск базового образа"
+		machine_creator TARGET > ~/.q-drant/baseqemu.log 2>&1 &
+		sleep ${TARGET[TIMEOUT]}
+		if ! pgrep -af "qemu.* -name base " >/dev/null; then 
+			echo "Машина из базового ораза не загрузилась"
+			exit 100
+		else
+			echo "Base машина запущена"; fi
+		if [[ "${FLAG^^}" == "--SSH" ]]; then
+			if  [[ -f "$SSH_PASS_KEY" ]]; then
+				ssh_open ${TARGET[PORT]} "$SSH_PASS_KEY" $IN_GUEST_USER "BASE"
+			else echo "Нет ссш ключа"
+				pkill -f "qemu.* -name base "
+				exit 100; fi
+		fi
+ 	fi
+ 	;;
+ 	"ssh")
+		if [[ -f "$SSH_PASS_KEY" ]]; then
+			ssh_open $(( 2200 + IF_COUNTER )) "$SSH_PASS_KEY" $IN_GUEST_USER "BASE"
+		else echo "Нет ссш ключа"
+			exit 100; fi
+	;;
+ 	esac
+;;
+"pull")
+	if ! conf_check; then exit 100; fi
+	if [[ "${ARG^^}" == -INFO ]]; then
+		echo "Содержимое зеркала"
+		curl -s "$SOURCE_MIRROR"
+		exit 0; fi
+	if ! curl -s --head "$SOURCE_MIRROR" >/dev/null; then
+		echo "Источник недоступен"
+		exit 100; fi
+		
+	if [ -z "$BASEIMG_ORIGIN" ]; then
+		echo "Не указана переменная BASEIMG_ORIGIN в конфиге для выбора образа"
+		exit 200; fi
+		
+	if [ -f "$BASE_DISK" ]; then
+		echo "Базовый диск уже существует";
+		exit 1; fi
+			
+	if [ ! -d "$MACHINES_DIR" ]; then
+		mkdir -p "$MACHINES_DIR"; fi
+	mkdir -p "$MACHINES_DIR/DirBox"
+		
+	if wget -O- "$SOURCE_BASEIMG${BASEIMG_ORIGIN}" | tar -xz -C "$MACHINES_DIR/DirBox"; then
+		true
+	else echo "Не удалось скачать $SOURCE_BASEIMG${BASEIMG_ORIGIN}"
+		exit 100; fi
+		
+	BASE_DISK="${BASE_DISK:-$MACHINES_DIR/ImgOrigin}"
+	metanames=("$MACHINES_DIR/DirBox"/*)
+	DISK_FILE=
+	for object in "${metanames[@]}"; do
+		row_ext="${object##*.}"
+		case $row_ext in
+		qcow2|qcow|qed|img|raw|vmdk|vdi|vhd|vhdx|vpc)
+			DISK_FILE="$object"
+		;;
+		*)
+			rm -f "$object" >/dev/null
+		;;
+		esac
+	done
+	if [[ -f "$DISK_FILE" ]]; then
+		DISK_EXT="${DISK_FILE##*.}"
+		BASE_DISK="${BASE_DISK%.*}.$DISK_EXT"
+		mv "$DISK_FILE" "$BASE_DISK"
+		sed -i "s|^BASE_DISK=.*|BASE_DISK=$BASE_DISK|" "$CONFIG_FILE"
+		echo "BASE_DISK= в конфигурационном файле был обновлен"
+	else
+		echo "Диск в архиве не был найден"; fi
+	rm -rf "$MACHINES_DIR/DirBox" >/dev/null
+	if [[ "${ARG^^}" != "--NO-VAGRANT" ]]; then
+		mkdir -p ~/.q-drant/common_keys
+		SSH_PASS_KEY="$HOME/.q-drant/common_keys/vagrant_insecur"
+		echo "Получение ssh ключа"
+		curl --progress-bar -fL https://raw.githubusercontent.com/hashicorp/vagrant/main/keys/vagrant \
+		-o "$SSH_PASS_KEY"
+		chmod 600 "$SSH_PASS_KEY"
+		sed -i "s|^SSH_PASS_KEY=.*|SSH_PASS_KEY=$SSH_PASS_KEY|" "$CONFIG_FILE"
+		echo "SSH_PASS_KEY= в конфигурационном файле был обновлен"; fi
 ;;
 esac
