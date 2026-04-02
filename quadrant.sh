@@ -24,7 +24,7 @@ if [ "$CMD" == "init" ]; then
 	if [ ! -f "$CONFIG_FILE" ]; then
 		cat > $CONFIG_FILE <<EOF
 #	Обязательные переменные для работы утилиты
-#	============================================
+#	=======================================================
 BASE_DISK=			# Путь до виртуального диска, служащего образцом (например: /home/user/base.qcow2)
 SSH_PASS_KEY=		# Путь до соответствующего закрытого SSH-ключа (например: /home/user/.ssh/id_rsa_vagrant)
 
@@ -48,7 +48,7 @@ SSH_PASS_KEY=		# Путь до соответствующего закрытог
 # NODE1_DEMON="FALSE"        # Режим отладки
 # NODE1_TIMEOUT="30"         # Время ожидания загрузки системы
 # NODE1_SFOLDER="./src"      # Shared Folder
-# NODE1_PROVISION=("sh:./scripts/install-docker.sh" "sh:./scripts/init-swarm.sh") # Провижинг
+# NODE1_BASE_PROVISION=("sh:./scripts/install-docker.sh" "sh:./scripts/init-swarm.sh") # Провижинг
 
 # Доступные настройки для каждой машины:
 # {VMNAME}_{FIELD_NAME}
@@ -73,6 +73,7 @@ SSH_PASS_KEY=		# Путь до соответствующего закрытог
 #   _INTNETS     # массив внутренних сетей в формате ("listen/5555" "connect/5555" "connect/")
 #	_ADD_FORWARD	# строка, где перечисляются пробросы через user интерфейс в
 #	формате: "hostfwd=tcp::n-:m"; со стороны хоста можно также указать адрес интерфеса
+#	_TARGET_KEY_INJECTION	# пробрасывает SSH_PASS_KEY вовнутрь виртуальной машины
 
 # Пример внутренних сетей (socket-сети между ВМ):
 # VM1_INTNETS=("listen/5555")
@@ -83,37 +84,40 @@ SSH_PASS_KEY=		# Путь до соответствующего закрытог
 # Пример дополнительных пробросов портов:
 # MANAGER01_ADD_FORWARD="hostfwd=tcp::80-:80"
 # MANAGER01_ADD_FORWARD="hostfwd=tcp::80-:80,hostfwd=tcp::443-:443" # несколько пишутся без пробелов через запятую
-#
-# ============================
+
+# =======================================================
 # Подготовка базового образа
-# ============================
+# =======================================================
+
 # Быстрая загрузка готового образа из зеркала:
-#   1. Укажи путь к боксу в переменной BASEIMG_ORIGIN
-#   2. Выполни: quadrant pull
-#   3. Скрипт скачает архив, извлечёт диск и обновит BASE_DISK в этом файле
+##   1. Укажи путь к боксу в переменной BASEIMG_ORIGIN
+##   2. Выполни: quadrant pull
+##   3. Скрипт скачает архив, извлечёт диск и обновит BASE_DISK в этом файле
+## Доступные образы: https://vagrant.elab.pro/
 #
-# Доступные образы: https://vagrant.elab.pro/
 # Примеры путей для BASEIMG_ORIGIN:
 # BASEIMG_ORIGIN=bento/ubuntu-24.04/1.0.0/libvirt/box      # Ubuntu 24.04
 # BASEIMG_ORIGIN=generic/rhel9/1.0.0/virtualbox/box        # RHEL 9
 # BASEIMG_ORIGIN=debian/bullseye64/1.0.0/virtualbox/box    # Debian 11
 #
 # После выполнения 'quadrant pull':
-#   1. Диск сохраняется в $MACHINES_DIR/ImgOrigin.<формат>
-#   2. Автоматически подставляется небезопасный SSH-ключ Vagrant
-#   3. Переменные BASE_DISK и SSH_PASS_KEY обновляются в этом файле
+##   1. Диск сохраняется в $MACHINES_DIR/ImgOrigin.<формат>
+##   2. Автоматически подставляется небезопасный SSH-ключ Vagrant
+##   3. Переменные BASE_DISK и SSH_PASS_KEY обновляются в этом файле
 #
 # Ручная подготовка образа:
-#   1. Укажи путь к существующему диску в BASE_DISK
-#   2. Выполни: quadrant zero run
-#   3. Система запустит образ
-#   4. После подготовки (пользователь, sudo, SSH) выключи ВМ — диск готов к использованию
+##   1. Укажи путь к существующему диску в BASE_DISK
+##   2. Выполни: quadrant zero run
+##   3. Система запустит образ
+##   4. После подготовки (пользователь, sudo, SSH) выключи ВМ — диск готов к использованию
 #
-# Важно: небезопасный ключ ('vagrant_insecur') предназначен ТОЛЬКО для учебных и тестовых сред.
+# Важно: небезопасный ключ ('vagrant_insecur') предназначен ТОЛЬКО для учебных и тестовых сред
 #
-# ============================
+
+# =======================================================
 # Опции для отладки
-# ============================
+# =======================================================
+
 #	_DEMON			# В значении FALSE выведет лог запуска текущей машины в окне терминала
 #	_SSH_DEBUG		# В значении TRUE выведет лог проверки ssh соединения при запуске
 EOF
@@ -212,6 +216,18 @@ ssh_open() {
 		-o UserKnownHostsFile=/dev/null ${user}@localhost
 	else echo "$name недоступна"; fi
 	}
+	
+share_inject() {
+	local port="$1"
+	local key="$2"
+	local object="$3"
+	local user="$4"
+	
+	scp -P ${port} -i "${key}" -o GlobalKnownHostsFile=/dev/null \
+		-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+		-r "$object" \
+		${user}@localhost:~/ >/dev/null 2>&1
+	}
 
 MACHINES_NAMES=${MACHINES_NAMES:-"node1"}
 MACHINES_DIR=${MACHINES_DIR:-"$HOME/machines_dir"}
@@ -299,13 +315,15 @@ for vm in "${MACHINES_NAMES[@]}"; do
 		echo "Машина $vm не отвечает"
 		pkill -f "qemu.*-name $vm"
 		exit 255; fi
-
+		
+	TARGET_KEY_INJECTION=$(get_value "$vm" "KEY_INJECTION" "FALSE")
+	if [[ "${TARGET_KEY_INJECTION^^}" == "TRUE" ]]; then
+		share_inject ${TARGET[PORT]} "${SSH_PASS_KEY}" "${SSH_PASS_KEY}" "${IN_GUEST_USER}"
+		echo "Ключ перенесен в $vm без настройки прав внутри"; fi
+	
 	TARGET_SFOLDER=$(get_value "$vm" "SFOLDER")
 	if [[ -n "$TARGET_SFOLDER" && -d "$TARGET_SFOLDER" ]]; then
-		scp -P ${TARGET[PORT]} -i ${SSH_PASS_KEY} -o GlobalKnownHostsFile=/dev/null \
-		-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-		-r "$TARGET_SFOLDER" \
-		${IN_GUEST_USER}@localhost:~/ >/dev/null 2>&1
+		share_inject ${TARGET[PORT]} "${SSH_PASS_KEY}" "$TARGET_SFOLDER" "${IN_GUEST_USER}"
 		echo "Выполнен проброс папки"
 	fi
 
@@ -328,6 +346,7 @@ for vm in "${MACHINES_NAMES[@]}"; do
 					-o GlobalKnownHostsFile=/dev/null \
 					${IN_GUEST_USER}@localhost "chmod +x $BASETASK \
 					&& $AGENT $BASETASK && rm $BASETASK" >/dev/null 2>&1
+					echo "Базовый провижининг $row для $vm выполнен"
 				else
 					echo "Файл провижининга не найден"; fi
 			else
@@ -570,7 +589,7 @@ done
 ;;
 "pull")
 	if ! conf_check; then exit 100; fi
-	if [[ "${ARG^^}" == -INFO ]]; then
+	if [[ "${ARG^^}" == --INFO ]]; then
 		echo "Содержимое зеркала"
 		curl -s "$SOURCE_MIRROR"
 		exit 0; fi
